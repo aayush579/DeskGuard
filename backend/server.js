@@ -1,34 +1,39 @@
 const express = require('express');
 const cors = require('cors');
-const Database = require('better-sqlite3');
+const fs = require('fs');
 const path = require('path');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize SQLite database
-const dbPath = path.join(__dirname, 'deskguard.db');
-const db = new Database(dbPath);
+const dbPath = path.join(__dirname, 'deskguard_db.json');
 
-// Create table if not exists
-db.exec(`
-  CREATE TABLE IF NOT EXISTS desks (
-    id TEXT PRIMARY KEY,
-    label TEXT,
-    zone TEXT,
-    status TEXT,
-    occupantName TEXT,
-    lastCheckIn INTEGER,
-    awayUntil INTEGER
-  )
-`);
+// Helper to read database
+function readDB() {
+  try {
+    if (!fs.existsSync(dbPath)) {
+      return seedInitialData();
+    }
+    const data = fs.readFileSync(dbPath, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    console.error('Error reading DB, re-seeding:', error);
+    return seedInitialData();
+  }
+}
 
-// Seed initial data if empty
-const countStmt = db.prepare('SELECT COUNT(*) as count FROM desks');
-const { count } = countStmt.get();
+// Helper to write database
+function writeDB(data) {
+  try {
+    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (error) {
+    console.error('Error writing to DB:', error);
+  }
+}
 
-if (count === 0) {
+// Seed initial data
+function seedInitialData() {
   const ZONES = ['Quiet Zone', 'Group Study', 'Computer Lab', 'Reading Area'];
   const OCCUPANTS = [
     'Anika Sharma', 'Rohan Mehta', 'Priya Patel', 'Arjun Desai',
@@ -41,12 +46,7 @@ if (count === 0) {
   const awayIds = [4, 11, 17];
   let occIdx = 0;
 
-  const insert = db.prepare(`
-    INSERT INTO desks (id, label, zone, status, occupantName, lastCheckIn, awayUntil)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  for (let i = 0; i < 24; i++) {
+  const initialDesks = Array.from({ length: 24 }, (_, i) => {
     const num = i + 1;
     const id = `D${num}`;
     const zone = ZONES[i % ZONES.length];
@@ -68,96 +68,104 @@ if (count === 0) {
       occIdx++;
     }
 
-    insert.run(id, id, zone, status, occupantName, lastCheckIn, awayUntil);
-  }
+    return { id, label: id, zone, status, occupantName, lastCheckIn, awayUntil };
+  });
+
+  writeDB(initialDesks);
   console.log('Seeded database with initial desks.');
+  return initialDesks;
 }
 
 // Background sweep job every 10 seconds to auto-expire away timers
 setInterval(() => {
   const now = Date.now();
-  const stmt = db.prepare(`
-    UPDATE desks 
-    SET status = 'free', occupantName = NULL, lastCheckIn = NULL, awayUntil = NULL 
-    WHERE status = 'away' AND awayUntil IS NOT NULL AND ? > awayUntil
-  `);
-  const info = stmt.run(now);
-  if (info.changes > 0) {
-    console.log(`Sweeper auto-freed ${info.changes} expired away desks.`);
+  const desks = readDB();
+  let changed = false;
+
+  const updatedDesks = desks.map(d => {
+    if (d.status === 'away' && d.awayUntil && now > d.awayUntil) {
+      changed = true;
+      console.log(`Sweeper auto-freed desk ${d.id} (Away timer expired)`);
+      return { ...d, status: 'free', occupantName: null, lastCheckIn: null, awayUntil: null };
+    }
+    return d;
+  });
+
+  if (changed) {
+    writeDB(updatedDesks);
   }
 }, 10000);
 
 // API Endpoints
 app.get('/api/desks', (req, res) => {
-  try {
-    const stmt = db.prepare('SELECT * FROM desks');
-    const desks = stmt.all();
-    res.json(desks);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+  res.json(readDB());
 });
 
 app.post('/api/desks/:id/status', (req, res) => {
   const { id } = req.params;
   const { status, occupantName } = req.body;
   const now = Date.now();
+  const desks = readDB();
 
-  try {
-    const getDesk = db.prepare('SELECT * FROM desks WHERE id = ?');
-    const desk = getDesk.get(id);
-
-    if (!desk) {
-      return res.status(404).json({ error: 'Desk not found' });
-    }
-
-    let updatedStatus = status;
-    let updatedOccupant = occupantName || desk.occupantName || 'You';
-    let updatedLastCheckIn = desk.lastCheckIn || now;
-    let updatedAwayUntil = null;
-
-    if (status === 'free') {
-      updatedStatus = 'free';
-      updatedOccupant = null;
-      updatedLastCheckIn = null;
-      updatedAwayUntil = null;
-    } else if (status === 'away') {
-      updatedStatus = 'away';
-      updatedAwayUntil = now + 20 * 60000; // 20 minutes
-    } else if (status === 'occupied') {
-      updatedStatus = 'occupied';
-      updatedAwayUntil = null;
-    }
-
-    const update = db.prepare(`
-      UPDATE desks 
-      SET status = ?, occupantName = ?, lastCheckIn = ?, awayUntil = ?
-      WHERE id = ?
-    `);
-    update.run(updatedStatus, updatedOccupant, updatedLastCheckIn, updatedAwayUntil, id);
-
-    const updatedDesk = getDesk.get(id);
-    res.json(updatedDesk);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  const deskIndex = desks.findIndex(d => d.id === id);
+  if (deskIndex === -1) {
+    return res.status(404).json({ error: 'Desk not found' });
   }
+
+  const desk = desks[deskIndex];
+  let updatedStatus = status;
+  let updatedOccupant = occupantName || desk.occupantName || 'You';
+  let updatedLastCheckIn = desk.lastCheckIn || now;
+  let updatedAwayUntil = null;
+
+  if (status === 'free') {
+    updatedStatus = 'free';
+    updatedOccupant = null;
+    updatedLastCheckIn = null;
+    updatedAwayUntil = null;
+  } else if (status === 'away') {
+    updatedStatus = 'away';
+    updatedAwayUntil = now + 20 * 60000; // 20 minutes
+  } else if (status === 'occupied') {
+    updatedStatus = 'occupied';
+    updatedAwayUntil = null;
+  }
+
+  const updatedDesk = {
+    ...desk,
+    status: updatedStatus,
+    occupantName: updatedOccupant,
+    lastCheckIn: updatedLastCheckIn,
+    awayUntil: updatedAwayUntil
+  };
+
+  desks[deskIndex] = updatedDesk;
+  writeDB(desks);
+
+  res.json(updatedDesk);
 });
 
 app.post('/api/desks/:id/reset', (req, res) => {
   const { id } = req.params;
-  try {
-    const update = db.prepare(`
-      UPDATE desks 
-      SET status = 'free', occupantName = NULL, lastCheckIn = NULL, awayUntil = NULL
-      WHERE id = ?
-    `);
-    update.run(id);
-    const getDesk = db.prepare('SELECT * FROM desks WHERE id = ?');
-    const desk = getDesk.get(id);
-    res.json(desk);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  const desks = readDB();
+
+  const deskIndex = desks.findIndex(d => d.id === id);
+  if (deskIndex === -1) {
+    return res.status(404).json({ error: 'Desk not found' });
   }
+
+  const updatedDesk = {
+    ...desks[deskIndex],
+    status: 'free',
+    occupantName: null,
+    lastCheckIn: null,
+    awayUntil: null
+  };
+
+  desks[deskIndex] = updatedDesk;
+  writeDB(desks);
+
+  res.json(updatedDesk);
 });
 
 const PORT = process.env.PORT || 5000;

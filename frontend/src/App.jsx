@@ -146,54 +146,68 @@ function Login({ onLogin }) {
   );
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
 /* ─── App ─────────────────────────────────────────────────────── */
 function App() {
   const [userRole, setUserRole] = useState(() => localStorage.getItem('deskguard_role') || null);
-  const [desks, setDesks] = useState(() => {
-    const saved = localStorage.getItem('deskguard_desks_v2');
-    return saved ? JSON.parse(saved) : buildInitialDesks();
-  });
+  const [desks, setDesks] = useState([]);
+  const [error, setError] = useState(null);
 
+  // Fetch desks helper
+  const fetchDesks = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/desks`);
+      if (!res.ok) throw new Error('Failed to fetch desks');
+      const data = await res.json();
+      setDesks(data);
+      setError(null);
+    } catch (err) {
+      console.error(err);
+      setError('Connection to server lost. Retrying...');
+    }
+  };
+
+  // Poll for updates from the backend
   useEffect(() => {
-    localStorage.setItem('deskguard_desks_v2', JSON.stringify(desks));
-  }, [desks]);
+    fetchDesks();
+    const interval = setInterval(fetchDesks, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (userRole) localStorage.setItem('deskguard_role', userRole);
     else localStorage.removeItem('deskguard_role');
   }, [userRole]);
 
-  /* Server-side sweeper simulation: auto-free expired away desks every 10s */
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDesks(cur => {
-        const now = Date.now();
-        let changed = false;
-        const updated = cur.map(d => {
-          if (d.status === 'away' && d.awayUntil && now > d.awayUntil) {
-            changed = true;
-            return { ...d, status: 'free', occupantName: null, lastCheckIn: null, awayUntil: null };
-          }
-          return d;
-        });
-        return changed ? updated : cur;
+  const updateDeskStatus = async (id, newStatus, occupantName) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/desks/${id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus, occupantName }),
       });
-    }, 10000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const updateDeskStatus = (id, newStatus, occupantName) => {
-    setDesks(desks.map(d => {
-      if (d.id !== id) return d;
-      const now = Date.now();
-      if (newStatus === 'free') return { ...d, status: 'free', occupantName: null, lastCheckIn: null, awayUntil: null };
-      if (newStatus === 'away') return { ...d, status: 'away', awayUntil: now + 20 * 60000 };
-      return { ...d, status: 'occupied', occupantName: occupantName || d.occupantName || 'You', lastCheckIn: d.lastCheckIn || now, awayUntil: null };
-    }));
+      if (!res.ok) throw new Error('Failed to update desk status');
+      const updatedDesk = await res.json();
+      setDesks(prev => prev.map(d => d.id === id ? updatedDesk : d));
+    } catch (err) {
+      console.error(err);
+      alert('Error updating desk status. Please check server connection.');
+    }
   };
 
-  const resetDesk = (id) => {
-    setDesks(desks.map(d => d.id === id ? { ...d, status: 'free', occupantName: null, lastCheckIn: null, awayUntil: null } : d));
+  const resetDesk = async (id) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/desks/${id}/reset`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error('Failed to reset desk');
+      const updatedDesk = await res.json();
+      setDesks(prev => prev.map(d => d.id === id ? updatedDesk : d));
+    } catch (err) {
+      console.error(err);
+      alert('Error resetting desk. Please check server connection.');
+    }
   };
 
   if (!userRole) {
@@ -209,6 +223,20 @@ function App() {
       <div className="app-layout">
         <Sidebar userRole={userRole} onLogout={() => setUserRole(null)} />
         <main className="main-content">
+          {error && (
+            <div style={{
+              background: '#fef2f2',
+              color: '#991b1b',
+              border: '1px solid #fee2e2',
+              padding: '0.75rem 1rem',
+              borderRadius: '6px',
+              fontSize: '0.875rem',
+              marginBottom: '1rem',
+              fontWeight: 500
+            }}>
+              {error}
+            </div>
+          )}
           <Routes>
             {userRole === 'student' && (
               <>
@@ -230,3 +258,4 @@ function App() {
 }
 
 export default App;
+

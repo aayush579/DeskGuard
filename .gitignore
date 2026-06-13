@@ -25,6 +25,7 @@ dist-ssr
 *.db
 *.sqlite
 backend/deskguard.db
+backend/deskguard_db.json
 
 # Editor directories and files
 .vscode/*
