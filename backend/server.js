@@ -1,174 +1,240 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { db, initDB } = require('./db');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const dbPath = path.join(__dirname, 'deskguard_db.json');
+const JWT_SECRET = process.env.JWT_SECRET || 'deskguard-super-secret-key-12345';
 
-// Helper to read database
-function readDB() {
-  try {
-    if (!fs.existsSync(dbPath)) {
-      return seedInitialData();
-    }
-    const data = fs.readFileSync(dbPath, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    console.error('Error reading DB, re-seeding:', error);
-    return seedInitialData();
+// --- Authentication Middleware ---
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
   }
-}
 
-// Helper to write database
-function writeDB(data) {
-  try {
-    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), 'utf8');
-  } catch (error) {
-    console.error('Error writing to DB:', error);
-  }
-}
-
-// Seed initial data
-function seedInitialData() {
-  const ZONES = ['Quiet Zone', 'Group Study', 'Computer Lab', 'Reading Area'];
-  const OCCUPANTS = [
-    'Anika Sharma', 'Rohan Mehta', 'Priya Patel', 'Arjun Desai',
-    'Kavya Iyer', 'Nikhil Verma', 'Sneha Reddy', 'Vikram Rao',
-    'Meera Nair', 'Siddharth Joshi', 'Tanvi Kulkarni'
-  ];
-
-  const now = Date.now();
-  const occupiedIds = [2, 5, 8, 10, 13, 16, 19, 22];
-  const awayIds = [4, 11, 17];
-  let occIdx = 0;
-
-  const initialDesks = Array.from({ length: 24 }, (_, i) => {
-    const num = i + 1;
-    const id = `D${num}`;
-    const zone = ZONES[i % ZONES.length];
-    let status = 'free';
-    let occupantName = null;
-    let lastCheckIn = null;
-    let awayUntil = null;
-
-    if (occupiedIds.includes(num)) {
-      status = 'occupied';
-      occupantName = OCCUPANTS[occIdx % OCCUPANTS.length];
-      lastCheckIn = now - (15 + occIdx * 18) * 60000;
-      occIdx++;
-    } else if (awayIds.includes(num)) {
-      status = 'away';
-      occupantName = OCCUPANTS[(occIdx + 5) % OCCUPANTS.length];
-      lastCheckIn = now - (30 + occIdx * 12) * 60000;
-      awayUntil = now + (5 + occIdx * 4) * 60000;
-      occIdx++;
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
     }
-
-    return { id, label: id, zone, status, occupantName, lastCheckIn, awayUntil };
+    req.user = user;
+    next();
   });
-
-  writeDB(initialDesks);
-  console.log('Seeded database with initial desks.');
-  return initialDesks;
 }
 
-// Background sweep job every 10 seconds to auto-expire away timers
-setInterval(() => {
-  const now = Date.now();
-  const desks = readDB();
-  let changed = false;
-
-  const updatedDesks = desks.map(d => {
-    if (d.status === 'away' && d.awayUntil && now > d.awayUntil) {
-      changed = true;
-      console.log(`Sweeper auto-freed desk ${d.id} (Away timer expired)`);
-      return { ...d, status: 'free', occupantName: null, lastCheckIn: null, awayUntil: null };
+function requireRole(role) {
+  return (req, res, next) => {
+    if (req.user && req.user.role === role) {
+      next();
+    } else {
+      res.status(403).json({ error: 'Forbidden: Insufficient privileges' });
     }
-    return d;
-  });
+  };
+}
 
-  if (changed) {
-    writeDB(updatedDesks);
+// --- Auth Endpoints ---
+app.post('/api/auth/register', async (req, res) => {
+  const { email, password, name, role } = req.body;
+
+  if (!email || !password || !name || !role) {
+    return res.status(400).json({ error: 'All fields (email, password, name, role) are required' });
   }
-}, 10000);
 
-// API Endpoints
-app.get('/api/desks', (req, res) => {
-  res.json(readDB());
+  if (role !== 'student' && role !== 'librarian') {
+    return res.status(400).json({ error: 'Invalid role. Must be student or librarian' });
+  }
+
+  try {
+    const existingUser = await db.getUserByEmail(email);
+    if (existingUser) {
+      return res.status(400).json({ error: 'User with this email already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    const newUser = await db.createUser(email, passwordHash, role, name);
+    
+    // Generate token
+    const token = jwt.sign(
+      { id: newUser.id, email: newUser.email, role: newUser.role, name: newUser.name },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.status(201).json({
+      token,
+      user: { email: newUser.email, role: newUser.role, name: newUser.name }
+    });
+  } catch (err) {
+    console.error('Registration error:', err);
+    res.status(500).json({ error: 'Server error during registration' });
+  }
 });
 
-app.post('/api/desks/:id/status', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+
+  try {
+    const user = await db.getUserByEmail(email);
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+    if (!validPassword) {
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+
+    // Generate token
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role, name: user.name },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      token,
+      user: { email: user.email, role: user.role, name: user.name }
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Server error during login' });
+  }
+});
+
+app.get('/api/auth/me', authenticateToken, (req, res) => {
+  res.json({ user: req.user });
+});
+
+// --- Desks Endpoints ---
+app.get('/api/desks', async (req, res) => {
+  try {
+    const desks = await db.getAllDesks();
+    res.json(desks);
+  } catch (err) {
+    console.error('Fetch desks error:', err);
+    res.status(500).json({ error: 'Failed to retrieve desks' });
+  }
+});
+
+app.post('/api/desks/:id/status', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { status, occupantName } = req.body;
   const now = Date.now();
-  const desks = readDB();
 
-  const deskIndex = desks.findIndex(d => d.id === id);
-  if (deskIndex === -1) {
-    return res.status(404).json({ error: 'Desk not found' });
+  try {
+    const desks = await db.getAllDesks();
+    const desk = desks.find(d => d.id === id);
+
+    if (!desk) {
+      return res.status(404).json({ error: 'Desk not found' });
+    }
+
+    let updatedStatus = status;
+    let updatedOccupant = occupantName || req.user.name || 'You';
+    let updatedLastCheckIn = desk.lastCheckIn || now;
+    let updatedAwayUntil = null;
+
+    if (status === 'free') {
+      updatedStatus = 'free';
+      updatedOccupant = null;
+      updatedLastCheckIn = null;
+      updatedAwayUntil = null;
+    } else if (status === 'away') {
+      updatedStatus = 'away';
+      updatedAwayUntil = now + 20 * 60000; // 20 minutes
+    } else if (status === 'occupied') {
+      updatedStatus = 'occupied';
+      updatedAwayUntil = null;
+    }
+
+    const updated = await db.updateDeskStatus(
+      id,
+      updatedStatus,
+      updatedOccupant,
+      updatedLastCheckIn,
+      updatedAwayUntil
+    );
+
+    res.json(updated);
+  } catch (err) {
+    console.error('Update desk status error:', err);
+    res.status(500).json({ error: 'Failed to update desk status' });
   }
-
-  const desk = desks[deskIndex];
-  let updatedStatus = status;
-  let updatedOccupant = occupantName || desk.occupantName || 'You';
-  let updatedLastCheckIn = desk.lastCheckIn || now;
-  let updatedAwayUntil = null;
-
-  if (status === 'free') {
-    updatedStatus = 'free';
-    updatedOccupant = null;
-    updatedLastCheckIn = null;
-    updatedAwayUntil = null;
-  } else if (status === 'away') {
-    updatedStatus = 'away';
-    updatedAwayUntil = now + 20 * 60000; // 20 minutes
-  } else if (status === 'occupied') {
-    updatedStatus = 'occupied';
-    updatedAwayUntil = null;
-  }
-
-  const updatedDesk = {
-    ...desk,
-    status: updatedStatus,
-    occupantName: updatedOccupant,
-    lastCheckIn: updatedLastCheckIn,
-    awayUntil: updatedAwayUntil
-  };
-
-  desks[deskIndex] = updatedDesk;
-  writeDB(desks);
-
-  res.json(updatedDesk);
 });
 
-app.post('/api/desks/:id/reset', (req, res) => {
+app.post('/api/desks/:id/reset', authenticateToken, requireRole('librarian'), async (req, res) => {
   const { id } = req.params;
-  const desks = readDB();
-
-  const deskIndex = desks.findIndex(d => d.id === id);
-  if (deskIndex === -1) {
-    return res.status(404).json({ error: 'Desk not found' });
+  try {
+    const updated = await db.resetDesk(id);
+    if (!updated) {
+      return res.status(404).json({ error: 'Desk not found' });
+    }
+    res.json(updated);
+  } catch (err) {
+    console.error('Reset desk error:', err);
+    res.status(500).json({ error: 'Failed to reset desk' });
   }
-
-  const updatedDesk = {
-    ...desks[deskIndex],
-    status: 'free',
-    occupantName: null,
-    lastCheckIn: null,
-    awayUntil: null
-  };
-
-  desks[deskIndex] = updatedDesk;
-  writeDB(desks);
-
-  res.json(updatedDesk);
 });
 
+// --- Seeding Test Credentials on Startup ---
+async function seedDefaultUsers() {
+  try {
+    // Seed default librarian
+    const librarianEmail = 'admin@library.edu';
+    const existingLibrarian = await db.getUserByEmail(librarianEmail);
+    if (!existingLibrarian) {
+      const salt = await bcrypt.genSalt(10);
+      const hash = await bcrypt.hash('AdminPass123!', salt);
+      await db.createUser(librarianEmail, hash, 'librarian', 'Chief Librarian');
+      console.log('Seeded default Librarian account.');
+    }
+
+    // Seed default student
+    const studentEmail = 'student@university.edu';
+    const existingStudent = await db.getUserByEmail(studentEmail);
+    if (!existingStudent) {
+      const salt = await bcrypt.genSalt(10);
+      const hash = await bcrypt.hash('StudentPass123!', salt);
+      await db.createUser(studentEmail, hash, 'student', 'Test Student');
+      console.log('Seeded default Student account.');
+    }
+  } catch (err) {
+    console.error('Error seeding test accounts:', err);
+  }
+}
+
+// --- Start Server & Init DB ---
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Backend server running on port ${PORT}`);
+initDB().then(async () => {
+  await seedDefaultUsers();
+  
+  // Background sweeper auto-expiring away desks every 10s
+  setInterval(async () => {
+    const now = Date.now();
+    try {
+      const expiredIds = await db.sweepExpiredAwayDesks(now);
+      if (expiredIds.length > 0) {
+        console.log(`Sweeper auto-freed expired desks: ${expiredIds.join(', ')}`);
+      }
+    } catch (err) {
+      console.error('Sweeper error:', err);
+    }
+  }, 10000);
+
+  app.listen(PORT, () => {
+    console.log(`Backend server running on port ${PORT}`);
+  });
 });

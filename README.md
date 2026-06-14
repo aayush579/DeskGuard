@@ -73,7 +73,7 @@ The React app is built with Vite. It can be easily deployed to **Vercel** for fr
 ### ⚙️ Backend Deployment (Railway or Render)
 The Express backend can be deployed to services like **Railway**, **Render**, or **Heroku**:
 
-#### Option A: Railway (Recommended)
+#### Option A: Railway 
 1. Go to [railway.app](https://railway.app/) and sign in.
 2. Create a **New Project** and choose **Deploy from GitHub repo**.
 3. Select this repo.
