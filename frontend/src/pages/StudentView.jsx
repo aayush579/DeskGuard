@@ -31,6 +31,20 @@ export default function StudentView({ desks, updateDeskStatus }) {
     return () => clearInterval(id);
   }, []);
 
+  // Auto check-in if URL query parameter ?desk=DXX is present
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const deskParam = params.get('desk');
+    if (deskParam && desks.length > 0) {
+      const desk = desks.find(d => d.id === deskParam);
+      if (desk && desk.status === 'free' && !activeDeskId) {
+        handleCheckIn(desk.id);
+        // Clean URL after action to prevent check-in loop on reload
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+  }, [desks, activeDeskId]);
+
   const currentDesk = desks.find(d => d.id === activeDeskId);
   const now = Date.now();
 

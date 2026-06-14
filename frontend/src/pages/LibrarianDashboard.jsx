@@ -7,6 +7,9 @@ import {
   UserCheck,
   UserMinus,
   Timer,
+  QrCode,
+  Printer,
+  X,
 } from 'lucide-react';
 
 /* ─── helpers ─────────────────────────────────────────────────────── */
@@ -167,6 +170,7 @@ function FilterBar({ active, onChange }) {
 
 export default function LibrarianDashboard({ desks, resetDesk }) {
   const [filter, setFilter] = useState('all');
+  const [showQRModal, setShowQRModal] = useState(false);
 
   const counts = useMemo(() => {
     const total = desks.length;
@@ -183,14 +187,24 @@ export default function LibrarianDashboard({ desks, resetDesk }) {
 
   const activityFeed = useMemo(() => buildActivityFeed(desks), [desks]);
 
+  const handlePrint = () => {
+    window.print();
+  };
+
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       {/* ── page header ──────────────────────────────────────────── */}
-      <div className="page-header">
-        <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 700 }}>Dashboard</h1>
-        <p style={{ margin: '0.25rem 0 0', color: 'var(--text-muted, #94a3b8)', fontSize: '0.9rem' }}>
-          Monitor and manage library desk occupancy
-        </p>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 700 }}>Dashboard</h1>
+          <p style={{ margin: '0.25rem 0 0', color: 'var(--text-muted, #94a3b8)', fontSize: '0.9rem' }}>
+            Monitor and manage library desk occupancy
+          </p>
+        </div>
+        <button className="btn btn-primary" onClick={() => setShowQRModal(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+          <QrCode size={16} />
+          <span>Generate QR Labels</span>
+        </button>
       </div>
 
       {/* ── stats row ────────────────────────────────────────────── */}
@@ -408,6 +422,60 @@ export default function LibrarianDashboard({ desks, resetDesk }) {
           </table>
         </div>
       </div>
+
+      {/* ── QR CODE LABELS PRINT PREVIEW MODAL ───────────────────── */}
+      {showQRModal && (
+        <div className="qr-modal-overlay">
+          <div className="qr-modal-card">
+            <div className="qr-modal-header no-print">
+              <div>
+                <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>Print Desk QR Labels</h2>
+                <p style={{ margin: '0.2rem 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  A4 grid layout formatted for printable adhesive labels.
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button className="btn btn-primary" onClick={handlePrint} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <Printer size={15} /> Print Labels
+                </button>
+                <button className="btn btn-ghost" onClick={() => setShowQRModal(false)} style={{ padding: '0.5rem' }}>
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="qr-labels-print-area">
+              <div className="qr-labels-grid">
+                {desks.map(desk => {
+                  const checkInUrl = `${window.location.origin}/?desk=${desk.id}`;
+                  const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(checkInUrl)}`;
+                  
+                  return (
+                    <div key={desk.id} className="qr-label-card">
+                      <div className="qr-label-header">
+                        <div className="qr-label-logo">
+                          <ShieldCheck size={16} color="var(--accent)" />
+                          <span>DeskGuard</span>
+                        </div>
+                        <span className="qr-label-id">{desk.id}</span>
+                      </div>
+                      <div className="qr-label-body">
+                        <img src={qrApiUrl} alt={`QR Code for ${desk.id}`} className="qr-label-image" />
+                        <div className="qr-label-instructions">
+                          <h3>Scan to Check In</h3>
+                          <p>1. Scan QR with phone camera</p>
+                          <p>2. Set away timers / checkout</p>
+                          <span className="qr-label-zone">{desk.zone}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

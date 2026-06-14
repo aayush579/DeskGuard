@@ -585,3 +585,189 @@ button { font-family: var(--font); }
 @media (max-width: 480px) {
   .desk-grid { grid-template-columns: 1fr; }
 }
+
+/* ═══════════════════ QR LABEL GENERATOR & MODAL ═══════════════════ */
+.qr-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+}
+
+.qr-modal-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  max-width: 900px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);
+}
+
+.qr-modal-header {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.qr-labels-print-area {
+  padding: 2rem;
+  overflow-y: auto;
+  flex: 1;
+  background: #f4f4f5; /* Light background for print preview simulation */
+}
+
+.qr-labels-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+}
+
+.qr-label-card {
+  background: #ffffff;
+  border: 2px dashed #d4d4d8;
+  border-radius: 8px;
+  padding: 1.25rem;
+  color: #09090b;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+}
+
+.qr-label-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #e4e4e7;
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.qr-label-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #18181b;
+}
+
+.qr-label-id {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #18181b;
+}
+
+.qr-label-body {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.qr-label-image {
+  width: 110px;
+  height: 110px;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  padding: 4px;
+  background: #ffffff;
+}
+
+.qr-label-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+}
+
+.qr-label-instructions h3 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin: 0 0 0.25rem 0;
+  color: #18181b;
+}
+
+.qr-label-instructions p {
+  font-size: 0.7rem;
+  color: #71717a;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.qr-label-zone {
+  display: inline-block;
+  align-self: flex-start;
+  margin-top: 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: #f4f4f5;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  color: #3f3f46;
+}
+
+/* ═══════════════════ PRINT MEDIA STYLES ═══════════════════ */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* Hide navigation sidebar and dashboard widgets */
+  .sidebar, .main-content > *:not(.qr-modal-overlay), .no-print, .qr-modal-header {
+    display: none !important;
+  }
+
+  .main-content {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .qr-modal-overlay {
+    position: static !important;
+    background: none !important;
+    padding: 0 !important;
+    display: block !important;
+    backdrop-filter: none !important;
+  }
+
+  .qr-modal-card {
+    border: none !important;
+    box-shadow: none !important;
+    max-width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .qr-labels-print-area {
+    background: none !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  .qr-labels-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 1.5cm !important; /* Space stickers out on sheet */
+    page-break-inside: avoid;
+  }
+
+  .qr-label-card {
+    border: 2px dashed #a1a1aa !important;
+    box-shadow: none !important;
+    page-break-inside: avoid;
+  }
+}
