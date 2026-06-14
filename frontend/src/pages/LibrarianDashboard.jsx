@@ -10,6 +10,7 @@ import {
   QrCode,
   Printer,
   X,
+  ShieldCheck,
 } from 'lucide-react';
 
 /* ─── helpers ─────────────────────────────────────────────────────── */
