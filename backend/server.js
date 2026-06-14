@@ -118,7 +118,43 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
   res.json({ user: req.user });
 });
 
+// --- SSE Active Client Pool ---
+let clients = [];
+
+async function broadcastDeskUpdates() {
+  try {
+    const desks = await db.getAllDesks();
+    const data = JSON.stringify(desks);
+    clients.forEach(client => {
+      client.res.write(`data: ${data}\n\n`);
+    });
+  } catch (err) {
+    console.error('SSE broadcast error:', err);
+  }
+}
+
 // --- Desks Endpoints ---
+app.get('/api/desks/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+
+  // Push initial state
+  db.getAllDesks().then(desks => {
+    res.write(`data: ${JSON.stringify(desks)}\n\n`);
+  }).catch(console.error);
+
+  const clientId = Date.now();
+  const newClient = { id: clientId, res };
+  clients.push(newClient);
+
+  req.on('close', () => {
+    clients = clients.filter(c => c.id !== clientId);
+  });
+});
+
 app.get('/api/desks', async (req, res) => {
   try {
     const desks = await db.getAllDesks();
@@ -168,6 +204,9 @@ app.post('/api/desks/:id/status', authenticateToken, async (req, res) => {
       updatedAwayUntil
     );
 
+    // Broadcast change
+    broadcastDeskUpdates();
+
     res.json(updated);
   } catch (err) {
     console.error('Update desk status error:', err);
@@ -182,6 +221,10 @@ app.post('/api/desks/:id/reset', authenticateToken, requireRole('librarian'), as
     if (!updated) {
       return res.status(404).json({ error: 'Desk not found' });
     }
+
+    // Broadcast change
+    broadcastDeskUpdates();
+
     res.json(updated);
   } catch (err) {
     console.error('Reset desk error:', err);
@@ -228,6 +271,7 @@ initDB().then(async () => {
       const expiredIds = await db.sweepExpiredAwayDesks(now);
       if (expiredIds.length > 0) {
         console.log(`Sweeper auto-freed expired desks: ${expiredIds.join(', ')}`);
+        broadcastDeskUpdates(); // Broadcast updates dynamically
       }
     } catch (err) {
       console.error('Sweeper error:', err);

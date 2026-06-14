@@ -213,11 +213,32 @@ function App() {
     }
   };
 
-  // Poll for updates from the backend
+  // Subscribe to real-time updates via SSE
   useEffect(() => {
+    // Initial fetch to get latest status immediately
     fetchDesks();
-    const interval = setInterval(fetchDesks, 5000);
-    return () => clearInterval(interval);
+
+    // Subscribe to SSE updates
+    const eventSource = new EventSource(`${API_BASE}/api/desks/events`);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        setDesks(data);
+        setError(null);
+      } catch (err) {
+        console.error('Error parsing SSE data:', err);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error('EventSource failed:', err);
+      setError('Connection to server lost. Reconnecting...');
+    };
+
+    return () => {
+      eventSource.close();
+    };
   }, []);
 
   const handleAuthSuccess = (newToken, newUser) => {
